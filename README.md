@@ -38,7 +38,7 @@
 - 用户、角色、审计日志；CORS 固定为 `*`。
 - 瓦片缓存、预切片、CDN、压缩；高并发与压力测试。
 - 点云、倾斜摄影、3D Tiles、地形与真实高程；3D 只是按属性高度拉伸。
-- CI 流水线与生产部署编排；仓库里的 Docker 文件未在本机实际构建验证。
+- 生产部署编排（CI 已接入 GitHub Actions，见 4.4）；仓库里的 Docker 文件未在本机实际构建验证。
 
 ## 3. 技术栈与数据流
 
@@ -126,6 +126,8 @@ pip install -r requirements-dev.txt
 `verify_pg.py` 直接请求 PostGIS 的接口和瓦片；`verify_offline.py`、`verify_edit.py` 用 Chrome 无头模式 + CDP 检查真实页面：离线环境只能请求本机、要素数、编辑后 `version` 递增、外部请求为 0。它们依赖 `requests`、`websocket-client`，这两个包只在 `requirements-dev.txt` 里，只装运行依赖时脚本会报 `ModuleNotFoundError`。
 
 CI 在 GitHub Actions 上运行（`.github/workflows/ci.yml`）：`push` 到 `main` 和 `pull_request` 时，用 `ubuntu-latest` + Python 3.10 安装 `requirements.txt` 与 `requirements-test.txt`，执行 `pytest -q`。CI 只覆盖 SQLite 路径，不安装 PostGIS，也不跑需要 Chrome 的 `verify_*.py`。
+
+实际结果：run #1（`push` 触发，commit `9b7b5c0`）为 success，见 <https://github.com/evenxu777/hdmap-platform/actions/runs/42600930948>；`pull_request` 触发条件已配置，但还没有用 PR 实测过。
 
 ## 5. 数据准备
 
@@ -272,7 +274,7 @@ project5_map_platform/
 - **瓦片按需生成、无缓存**：没有预切片、ETag、CDN；PostGIS 路径依赖 GiST 索引，未做压测，不提供吞吐数据。
 - **导入限制**：只接受 SRID 4326 且非空几何的 Shapefile；DBF 字段名按 10 字符截断；不支持多图层、编码非 UTF-8 的 DBF、批量事务调优。
 - **3D 是示意级**：多边形按 `height_m` 或默认高度拉伸，点位是球体，没有地形、点云、倾斜摄影或 3D Tiles。
-- **CI 覆盖范围有限**：GitHub Actions 只跑 `tests/test_api.py` 的 SQLite 路径；PostGIS 和 `verify_*.py` 的浏览器检查仍是本地手动执行。`Dockerfile`、`docker-compose.yml` 存在，但本机没有 Docker，未实际构建运行。
+- **CI 覆盖范围有限**：GitHub Actions 已接入（run #1 `push` 触发为 success，`pull_request` 触发尚未实测），但只跑 `tests/test_api.py` 的 SQLite 路径；PostGIS 和 `verify_*.py` 的浏览器检查仍是本地手动执行。`Dockerfile`、`docker-compose.yml` 存在，但本机没有 Docker，未实际构建运行。
 - **PostGIS 只在单机验证过**：PostgreSQL 17 + PostGIS 3.6，库名 `mapdemo`；没有多实例、主从或连接池配置。
 
 ## 10. 许可证与数据来源

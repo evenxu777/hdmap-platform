@@ -1,5 +1,7 @@
 # 高精地图平台（Web 端）
 
+[![CI](https://github.com/evenxu777/hdmap-platform/actions/workflows/ci.yml/badge.svg)](https://github.com/evenxu777/hdmap-platform/actions/workflows/ci.yml)
+
 把园区/矿区的矢量地图数据从文件导入数据库，通过 HTTP 接口提供要素查询、MVT 瓦片和在线编辑，并在浏览器里完成查看、点选与编辑的最小可用平台。
 
 当前定位是单机运行的内部工具原型：默认无用户体系、示例数据在万级以下、按需生成瓦片。生产环境需要的权限、切片缓存、并发与运维能力没有做，详见[已知限制](#9-已知限制与未实现项)。
@@ -122,6 +124,8 @@ pip install -r requirements-dev.txt
 ```
 
 `verify_pg.py` 直接请求 PostGIS 的接口和瓦片；`verify_offline.py`、`verify_edit.py` 用 Chrome 无头模式 + CDP 检查真实页面：离线环境只能请求本机、要素数、编辑后 `version` 递增、外部请求为 0。它们依赖 `requests`、`websocket-client`，这两个包只在 `requirements-dev.txt` 里，只装运行依赖时脚本会报 `ModuleNotFoundError`。
+
+CI 在 GitHub Actions 上运行（`.github/workflows/ci.yml`）：`push` 到 `main` 和 `pull_request` 时，用 `ubuntu-latest` + Python 3.10 安装 `requirements.txt` 与 `requirements-test.txt`，执行 `pytest -q`。CI 只覆盖 SQLite 路径，不安装 PostGIS，也不跑需要 Chrome 的 `verify_*.py`。
 
 ## 5. 数据准备
 
@@ -248,8 +252,10 @@ project5_map_platform/
 ├─ tests/test_api.py       SQLite 路径的接口测试
 ├─ sql/init_postgis.sql    建库与扩展初始化参考
 ├─ docs/                   口述文案与演示脚本
+├─ .github/workflows/ci.yml  GitHub Actions：Python 3.10 + pytest
 ├─ requirements.txt        运行依赖
-├─ requirements-dev.txt    测试与验证依赖
+├─ requirements-test.txt   CI/测试依赖（pytest、httpx）
+├─ requirements-dev.txt    测试与验证依赖（含 verify_* 所需包）
 ├─ Dockerfile
 └─ docker-compose.yml
 ```
@@ -266,7 +272,7 @@ project5_map_platform/
 - **瓦片按需生成、无缓存**：没有预切片、ETag、CDN；PostGIS 路径依赖 GiST 索引，未做压测，不提供吞吐数据。
 - **导入限制**：只接受 SRID 4326 且非空几何的 Shapefile；DBF 字段名按 10 字符截断；不支持多图层、编码非 UTF-8 的 DBF、批量事务调优。
 - **3D 是示意级**：多边形按 `height_m` 或默认高度拉伸，点位是球体，没有地形、点云、倾斜摄影或 3D Tiles。
-- **没有 CI**：`pytest` 是本地人工执行。`Dockerfile`、`docker-compose.yml` 存在，但本机没有 Docker，未实际构建运行。
+- **CI 覆盖范围有限**：GitHub Actions 只跑 `tests/test_api.py` 的 SQLite 路径；PostGIS 和 `verify_*.py` 的浏览器检查仍是本地手动执行。`Dockerfile`、`docker-compose.yml` 存在，但本机没有 Docker，未实际构建运行。
 - **PostGIS 只在单机验证过**：PostgreSQL 17 + PostGIS 3.6，库名 `mapdemo`；没有多实例、主从或连接池配置。
 
 ## 10. 许可证与数据来源

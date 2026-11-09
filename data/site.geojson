@@ -1,0 +1,50 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {"kind": "road", "name": "主运输道路", "grade": 3.5, "oneway": true, "speed_limit": 30},
+      "geometry": {"type": "LineString", "coordinates": [[120.6000, 31.3022], [120.6090, 31.3022], [120.6120, 31.3030]]}
+    },
+    {
+      "type": "Feature",
+      "properties": {"kind": "road", "name": "装载区支路", "grade": 8.2, "oneway": true, "speed_limit": 20},
+      "geometry": {"type": "LineString", "coordinates": [[120.6020, 31.3022], [120.6020, 31.3050]]}
+    },
+    {
+      "type": "Feature",
+      "properties": {"kind": "geofence", "name": "采区围栏", "status": "active"},
+      "geometry": {"type": "Polygon", "coordinates": [[[120.6000, 31.3000], [120.6060, 31.3000], [120.6060, 31.3040], [120.6000, 31.3040], [120.6000, 31.3000]]]}
+    },
+    {
+      "type": "Feature",
+      "properties": {"kind": "geofence", "name": "排土场围栏", "status": "active"},
+      "geometry": {"type": "Polygon", "coordinates": [[[120.6070, 31.3000], [120.6120, 31.3000], [120.6120, 31.3040], [120.6070, 31.3040], [120.6070, 31.3000]]]}
+    },
+    {
+      "type": "Feature",
+      "properties": {"kind": "load", "name": "装载点-A", "capacity_t": 90},
+      "geometry": {"type": "Point", "coordinates": [120.6020, 31.3035]}
+    },
+    {
+      "type": "Feature",
+      "properties": {"kind": "unload", "name": "卸载点-B", "capacity_t": 120},
+      "geometry": {"type": "Point", "coordinates": [120.6090, 31.3035]}
+    },
+    {
+      "type": "Feature",
+      "properties": {"kind": "fuel", "name": "加油点-1"},
+      "geometry": {"type": "Point", "coordinates": [120.6040, 31.3010]}
+    },
+    {
+      "type": "Feature",
+      "properties": {"kind": "crusher", "name": "破碎站", "capacity_tph": 800},
+      "geometry": {"type": "Point", "coordinates": [120.6105, 31.3012]}
+    },
+    {
+      "type": "Feature",
+      "properties": {"kind": "stockpile", "name": "料堆-1", "height_m": 12},
+      "geometry": {"type": "Polygon", "coordinates": [[[120.6030, 31.3055], [120.6045, 31.3055], [120.6045, 31.3065], [120.6030, 31.3065], [120.6030, 31.3055]]]}
+    }
+  ]
+}

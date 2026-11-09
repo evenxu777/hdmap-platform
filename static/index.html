@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>HD Map Platform Demo</title>
+<link rel="stylesheet" href="vendor/ol.css" />
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: "Microsoft YaHei", system-ui, sans-serif; color: #222; }
+  header { display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: #1f3a5f; color: #fff; flex-wrap: wrap; }
+  header h1 { font-size: 15px; margin: 0 12px 0 0; font-weight: 600; }
+  button { padding: 6px 10px; border: 0; border-radius: 4px; background: #2f6fb3; color: #fff; cursor: pointer; font-size: 13px; }
+  button.ghost { background: rgba(255,255,255,.18); }
+  button:disabled { background: #888; cursor: default; }
+  input, select { padding: 5px 7px; border: 1px solid #ccc; border-radius: 4px; font-size: 13px; }
+  #status { font-size: 12px; opacity: .9; margin-left: auto; }
+  #wrap { display: flex; height: calc(100vh - 48px); }
+  #map { flex: 1; background: #eef2f5; }
+  #panel { width: 300px; border-left: 1px solid #ddd; padding: 12px; overflow: auto; background: #fafafa; }
+  #panel h3 { margin: 0 0 8px; font-size: 13px; color: #1f3a5f; }
+  #props { font-size: 12px; line-height: 1.6; white-space: pre-wrap; background: #fff; border: 1px solid #eee; padding: 8px; border-radius: 4px; min-height: 90px; }
+  .row { margin-bottom: 8px; display: flex; gap: 6px; align-items: center; }
+  .row label { width: 44px; font-size: 12px; color: #555; }
+  .row input, .row select { flex: 1; }
+  #drawHint { font-size: 12px; color: #b26a00; margin-top: 6px; }
+  #saveMsg { word-break: break-all; }
+  #view3d { position: absolute; inset: 48px 0 0 0; display: none; background: #0f1720; z-index: 5; }
+  #view3d canvas { display: block; }
+  #view3d .tip { position: absolute; left: 12px; bottom: 12px; color: #cbd5e1; font-size: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>高精地图平台 Demo</h1>
+  <button id="btnAdd" class="ghost">＋ 新增点位</button>
+  <button id="btn3d" class="ghost">3D 视角</button>
+  <button id="btnBase" class="ghost">在线底图</button>
+  <button id="btnReload" class="ghost">刷新</button>
+  <input id="token" placeholder="编辑令牌 (demo-token)" value="demo-token" style="width:170px" />
+  <span id="status">加载中…</span>
+</header>
+
+<div id="wrap">
+  <div id="map"></div>
+  <div id="panel">
+    <h3>要素属性</h3>
+    <div id="props">点击地图上的要素查看属性；新增模式下点击空白处落点。</div>
+    <div id="drawHint" style="display:none">新增模式：点击地图选点，填写下方表单后保存。</div>
+    <h3 style="margin-top:14px">新增点位</h3>
+    <div class="row"><label>名称</label><input id="fName" placeholder="如 装载点-C" /></div>
+    <div class="row"><label>类型</label>
+      <select id="fKind">
+        <option value="load">装载点</option><option value="unload">卸载点</option>
+        <option value="fuel">加油点</option><option value="crusher">破碎站</option>
+        <option value="parking">停车区</option><option value="geofence">围栏</option>
+      </select>
+    </div>
+    <div class="row"><label>经纬度</label><input id="fLonLat" readonly placeholder="点击地图选点" /></div>
+    <div class="row"><button id="btnSave" style="flex:1">保存到后端</button></div>
+    <div id="saveMsg" style="font-size:12px"></div>
+  </div>
+</div>
+
+<div id="view3d">
+  <div class="tip">拖拽旋转 · 滚轮缩放 · 再点“2D 视角”返回</div>
+</div>
+
+<script src="vendor/ol.js"></script>
+<script src="vendor/three.min.js"></script>
+<script>
+const API = "";
+let features = null, addMode = false, pickedLonLat = null;
+let editing = null; // {id, version}：点选已有点位后进入编辑，保存走 PUT + 乐观锁
+
+const KIND_COLOR = {
+  road: "#333333", geofence: "#2e7d32", load: "#1f77b4", unload: "#d62728",
+  fuel: "#ff7f0e", crusher: "#8c564b", stockpile: "#9467bd", parking: "#7f7f7f"
+};
+
+function styleFor(f) {
+  const kind = f.get("kind");
+  const color = KIND_COLOR[kind] || "#555";
+  if (f.getGeometry().getType() === "Point") {
+    return new ol.style.Style({
+      image: new ol.style.Circle({
+        radius: 6, fill: new ol.style.Fill({ color }),
+        stroke: new ol.style.Stroke({ color: "#fff", width: 2 })
+      }),
+      text: new ol.style.Text({ text: f.get("name") || "", offsetY: -14,
+        font: "12px Microsoft YaHei", fill: new ol.style.Fill({ color }), stroke: new ol.style.Stroke({ color: "#fff", width: 3 }) })
+    });
+  }
+  if (f.getGeometry().getType() === "Polygon") {
+    return new ol.style.Style({
+      stroke: new ol.style.Stroke({ color, width: 2 }),
+      fill: new ol.style.Fill({ color: color + "22" })
+    });
+  }
+  return new ol.style.Style({ stroke: new ol.style.Stroke({ color, width: 3 }) });
+}
+
+/* ---------- 离线底图：本地矢量网格（不依赖任何在线瓦片） ---------- */
+function makeBaseFeatures() {
+  const out = [];
+  const ring = [[120.585,31.285],[120.627,31.285],[120.627,31.323],[120.585,31.323],[120.585,31.285]];
+  out.push(new ol.Feature({ geometry: new ol.geom.Polygon([ring.map(c => ol.proj.fromLonLat(c))]) }));
+  for (let lon = 120.585; lon <= 120.6271; lon += 0.003) {
+    out.push(new ol.Feature({ geometry: new ol.geom.LineString([
+      ol.proj.fromLonLat([lon, 31.285]), ol.proj.fromLonLat([lon, 31.323])]) }));
+  }
+  for (let lat = 31.285; lat <= 31.3231; lat += 0.003) {
+    out.push(new ol.Feature({ geometry: new ol.geom.LineString([
+      ol.proj.fromLonLat([120.585, lat]), ol.proj.fromLonLat([120.627, lat])]) }));
+  }
+  return out;
+}
+
+const baseLayer = new ol.layer.Vector({
+  source: new ol.source.Vector({ features: makeBaseFeatures() }),
+  style: (f) => f.getGeometry().getType() === "Polygon"
+    ? new ol.style.Style({
+        fill: new ol.style.Fill({ color: "#f8fafc" }),
+        stroke: new ol.style.Stroke({ color: "#d6dee6", width: 1 })
+      })
+    : new ol.style.Style({ stroke: new ol.style.Stroke({ color: "#e3e9ef", width: 1 }) })
+});
+
+/* 在线 OSM 底图：默认关闭，断网演示不受影响；需要时手动打开 */
+const osmLayer = new ol.layer.Tile({ source: new ol.source.OSM(), visible: false });
+
+const vectorSource = new ol.source.Vector();
+const vectorLayer = new ol.layer.Vector({ source: vectorSource, style: styleFor });
+const map = new ol.Map({
+  target: "map",
+  layers: [baseLayer, osmLayer, vectorLayer],
+  view: new ol.View({ center: ol.proj.fromLonLat([120.606, 31.303]), zoom: 16 })
+});
+// 调试/自动化钩子（不影响正常使用）
+window.__demo = { map, vectorSource, vectorLayer, osmLayer };
+
+function clearEditing() {
+  editing = null;
+  const btn = document.getElementById("btnSave");
+  if (btn) btn.textContent = "保存到后端";
+}
+
+async function loadFeatures() {
+  clearEditing();
+  const r = await fetch(API + "/api/features");
+  features = await r.json();
+  vectorSource.clear();
+  const fmt = new ol.format.GeoJSON();
+  const feats = fmt.readFeatures(features, {
+    dataProjection: "EPSG:4326", featureProjection: "EPSG:3857"
+  });
+  // 把 API 的 id/version 显式挂到 OL 要素上，避免依赖解析器对顶层字段的处理
+  feats.forEach((f, i) => {
+    f.setId(features.features[i].id);
+    f.set("version", features.features[i].version);
+  });
+  vectorSource.addFeatures(feats);
+  document.getElementById("status").textContent =
+    `要素 ${features.features.length} 个 · 后端 ` + (await (await fetch(API + "/api/health")).json()).backend +
+    ` · 底图 ${osmLayer.getVisible() ? "OSM（需联网）" : "本地网格（离线）"}`;
+}
+loadFeatures();
+
+map.on("singleclick", (evt) => {
+  const hit = map.forEachFeatureAtPixel(evt.pixel, (f) => f, { layerFilter: (l) => l === vectorLayer });
+  if (hit) {
+    const p = hit.getProperties();
+    delete p.geometry;
+    document.getElementById("props").textContent = JSON.stringify(p, null, 2);
+    // 只对已有点位开放编辑；线/面仍只看属性，避免把点位表单套到别的几何
+    const geom = hit.getGeometry();
+    if (!addMode && geom.getType() === "Point" && hit.get("version") !== undefined) {
+      const keep = JSON.parse(JSON.stringify(hit.getProperties()));
+      ["geometry", "kind", "name", "status", "updated_at", "version", "id"].forEach(k => delete keep[k]);
+      editing = { id: hit.getId(), version: hit.get("version"), properties: keep };
+      pickedLonLat = ol.proj.toLonLat(geom.getCoordinates());
+      document.getElementById("fName").value = hit.get("name") || "";
+      const sel = document.getElementById("fKind");
+      if ([...sel.options].some(o => o.value === hit.get("kind"))) sel.value = hit.get("kind");
+      document.getElementById("fLonLat").value =
+        pickedLonLat[0].toFixed(6) + ", " + pickedLonLat[1].toFixed(6);
+      document.getElementById("btnSave").textContent = "更新到后端（v" + editing.version + "）";
+      const msg = document.getElementById("saveMsg");
+      msg.style.color = "#555";
+      msg.textContent = "正在编辑要素 id=" + editing.id + "，version=" + editing.version;
+    } else {
+      clearEditing();
+      if (!addMode) { pickedLonLat = null; document.getElementById("fLonLat").value = ""; }
+    }
+    return;
+  }
+  if (addMode) {
+    pickedLonLat = ol.proj.toLonLat(evt.coordinate);
+    document.getElementById("fLonLat").value =
+      pickedLonLat[0].toFixed(6) + ", " + pickedLonLat[1].toFixed(6);
+    document.getElementById("saveMsg").textContent = "";
+  } else {
+    clearEditing();
+    pickedLonLat = null;
+    document.getElementById("fLonLat").value = "";
+  }
+});
+
+document.getElementById("btnAdd").onclick = () => {
+  addMode = !addMode;
+  clearEditing();
+  pickedLonLat = null;
+  document.getElementById("fLonLat").value = "";
+  document.getElementById("saveMsg").textContent = "";
+  document.getElementById("drawHint").style.display = addMode ? "block" : "none";
+  document.getElementById("btnAdd").textContent = addMode ? "✕ 退出新增" : "＋ 新增点位";
+  map.getTargetElement().style.cursor = addMode ? "crosshair" : "";
+};
+
+document.getElementById("btnSave").onclick = async () => {
+  const msg = document.getElementById("saveMsg");
+  if (!pickedLonLat) { msg.style.color = "#c00"; msg.textContent = "请先在地图上选点"; return; }
+  const wasEdit = !!editing;
+  const body = {
+    type: "Feature",
+    kind: document.getElementById("fKind").value,
+    name: document.getElementById("fName").value || "未命名点位",
+    properties: wasEdit ? editing.properties : {},
+    geometry: { type: "Point", coordinates: pickedLonLat }
+  };
+  if (wasEdit) body.version = editing.version;
+  const url = wasEdit ? API + "/api/features/" + editing.id : API + "/api/features";
+  const r = await fetch(url, {
+    method: wasEdit ? "PUT" : "POST",
+    headers: { "Content-Type": "application/json", "X-Edit-Token": document.getElementById("token").value },
+    body: JSON.stringify(body)
+  });
+  const data = await r.json();
+  if (r.ok) {
+    msg.style.color = "#2e7d32";
+    msg.textContent = (wasEdit ? "已更新" : "已保存") +
+      "（id=" + data.id + "，version=" + data.version + "）";
+    pickedLonLat = null;
+    document.getElementById("fLonLat").value = "";
+    await loadFeatures();
+    // 保存后属性面板同步为落库值，避免还显示保存前的旧内容
+    const saved = features.features.find(x => x.id === data.id);
+    if (saved) {
+      document.getElementById("props").textContent =
+        JSON.stringify({ ...saved.properties, version: saved.version }, null, 2);
+    }
+  } else {
+    const err = data.error || {};
+    msg.style.color = "#c00";
+    msg.textContent = "保存失败：" + (err.message || data.detail || ("HTTP " + r.status)) +
+      (err.request_id ? "（request_id=" + err.request_id + "）" : "");
+  }
+};
+
+document.getElementById("btnReload").onclick = loadFeatures;
+
+document.getElementById("btnBase").onclick = () => {
+  osmLayer.setVisible(!osmLayer.getVisible());
+  document.getElementById("btnBase").textContent = osmLayer.getVisible() ? "本地底图" : "在线底图";
+  loadFeatures();
+};
+
+/* ---------------- 3D：Three.js 拉伸体块（同一份 GeoJSON） ---------------- */
+let scene3d = null, renderer3d = null, camera3d = null, dragging = false, lastX = 0, lastY = 0, rotY = 0.6, rotX = 0.9, dist = 260;
+document.getElementById("btn3d").onclick = () => {
+  const box = document.getElementById("view3d");
+  const show = box.style.display === "none" || !box.style.display;
+  box.style.display = show ? "block" : "none";
+  document.getElementById("btn3d").textContent = show ? "2D 视角" : "3D 视角";
+  if (show) { if (!renderer3d) init3d(); build3d(); }
+  else if (renderer3d) renderer3d.setAnimationLoop(null);
+};
+
+function init3d() {
+  const box = document.getElementById("view3d");
+  renderer3d = new THREE.WebGLRenderer({ antialias: true });
+  renderer3d.setSize(box.clientWidth, box.clientHeight);
+  box.appendChild(renderer3d.domElement);
+  scene3d = new THREE.Scene();
+  scene3d.background = new THREE.Color(0x0f1720);
+  camera3d = new THREE.PerspectiveCamera(50, box.clientWidth / box.clientHeight, 0.1, 5000);
+  scene3d.add(new THREE.AmbientLight(0xffffff, 0.75));
+  const dir = new THREE.DirectionalLight(0xffffff, 0.7);
+  dir.position.set(120, 200, 80);
+  scene3d.add(dir);
+  const grid = new THREE.GridHelper(600, 20, 0x334155, 0x1e293b);
+  scene3d.add(grid);
+
+  renderer3d.domElement.addEventListener("mousedown", e => { dragging = true; lastX = e.clientX; lastY = e.clientY; });
+  window.addEventListener("mouseup", () => dragging = false);
+  window.addEventListener("mousemove", e => {
+    if (!dragging) return;
+    rotY += (e.clientX - lastX) * 0.008;
+    rotX += (e.clientY - lastY) * 0.005;
+    rotX = Math.max(0.15, Math.min(1.5, rotX));
+    lastX = e.clientX; lastY = e.clientY;
+  });
+  renderer3d.domElement.addEventListener("wheel", e => {
+    e.preventDefault();
+    dist = Math.max(80, Math.min(900, dist + e.deltaY * 0.4));
+  }, { passive: false });
+  renderer3d.setAnimationLoop(render3d);
+}
+
+function project(lon, lat) {
+  const lat0 = 31.303;
+  return [ (lon - 120.606) * 111320 * Math.cos(lat0 * Math.PI / 180), (lat - lat0) * 111320 ];
+}
+
+function build3d() {
+  if (!scene3d || !features) return;
+  [...scene3d.children].filter(o => o.userData.dyn).forEach(o => scene3d.remove(o));
+  features.features.forEach(f => {
+    const g = f.geometry, kind = f.properties.kind;
+    if (g.type === "Polygon") {
+      const ring = g.coordinates[0];
+      const shape = new THREE.Shape();
+      ring.forEach(([lon, lat], i) => {
+        const [x, y] = project(lon, lat);
+        i ? shape.lineTo(x, y) : shape.moveTo(x, y);
+      });
+      const h = f.properties.height_m || (kind === "geofence" ? 6 : 12);
+      const geo = new THREE.ExtrudeGeometry(shape, { depth: h, bevelEnabled: false });
+      const mat = new THREE.MeshLambertMaterial({
+        color: kind === "geofence" ? 0x2e7d32 : 0x9467bd, transparent: true, opacity: 0.75
+      });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.rotation.x = -Math.PI / 2; mesh.userData.dyn = true;
+      scene3d.add(mesh);
+    } else if (g.type === "LineString") {
+      const pts = g.coordinates.map(([lon, lat]) => {
+        const [x, y] = project(lon, lat); return new THREE.Vector3(x, 1, y);
+      });
+      const geo = new THREE.BufferGeometry().setFromPoints(pts);
+      const line = new THREE.Line(geo, new THREE.LineBasicMaterial({ color: 0xffffff }));
+      line.userData.dyn = true; scene3d.add(line);
+    } else if (g.type === "Point") {
+      const [x, y] = project(g.coordinates[0], g.coordinates[1]);
+      const mesh = new THREE.Mesh(
+        new THREE.SphereGeometry(4, 12, 12),
+        new THREE.MeshLambertMaterial({ color: 0xff7f0e })
+      );
+      mesh.position.set(x, 5, y); mesh.userData.dyn = true;
+      scene3d.add(mesh);
+    }
+  });
+  scene3d.userData.ready = true;
+}
+
+function render3d() {
+  if (!renderer3d) return;
+  const box = document.getElementById("view3d");
+  renderer3d.setSize(box.clientWidth, box.clientHeight);
+  camera3d.aspect = box.clientWidth / box.clientHeight;
+  camera3d.updateProjectionMatrix();
+  camera3d.position.set(Math.sin(rotY) * dist, Math.sin(rotX) * dist, Math.cos(rotY) * dist);
+  camera3d.lookAt(0, 0, 0);
+  renderer3d.render(scene3d, camera3d);
+}
+</script>
+</body>
+</html>

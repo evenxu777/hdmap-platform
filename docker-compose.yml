@@ -1,0 +1,22 @@
+services:
+  db:
+    image: postgis/postgis:16-3.4
+    environment:
+      POSTGRES_USER: gis
+      POSTGRES_PASSWORD: gis
+      POSTGRES_DB: gis
+    ports: ["5432:5432"]
+    volumes:
+      - ./sql/init_postgis.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - pgdata:/var/lib/postgresql/data
+
+  api:
+    build: .
+    environment:
+      DATABASE_URL: postgresql://gis:gis@db:5432/gis
+      EDIT_TOKEN: demo-token
+    ports: ["8000:8000"]
+    depends_on: [db]
+
+volumes:
+  pgdata:
